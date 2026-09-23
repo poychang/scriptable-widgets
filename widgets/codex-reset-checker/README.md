@@ -96,8 +96,8 @@ const AUTH_JSON = {
 
 可能原因包括 API 已變更、網路連線問題、帳號權限變更，或服務暫時無法使用。可以暫時將 `CONFIG.debug` 設為 `true`，在 Scriptable Console 查看回應內容；排查完成後請改回 `false`。
 
-## 參考文件
+## 效果
 
-- [Scriptable](https://scriptable.app/)
-- [Scriptable Docs - Scriptable Docs](https://docs.scriptable.app/)
-- [Codex Reset Checker](https://github.com/doggy8088/codex-reset-checker)
+![iPhone 工具效果](./iphone-widget.jpg)
+
+![iPad 側邊欄工具效果](./ipad-side-widget.jpg)
