@@ -64,9 +64,9 @@ const KEYCHAIN_ACCOUNT_ID = 'ChatGPTUsageWidget.AccountId';
 // ============================================================
 
 const THEME = {
-    backgroundTop: new Color('#182338'),
-    backgroundMiddle: new Color('#101827'),
-    backgroundBottom: new Color('#080D16'),
+    backgroundTop: new Color('#484848'),
+    backgroundMiddle: new Color('#333333'),
+    backgroundBottom: new Color('#242424'),
     card: new Color('#FFFFFF', 0.075),
     cardBorder: new Color('#FFFFFF', 0.1),
     text: new Color('#F8FAFC'),
@@ -75,6 +75,7 @@ const THEME = {
     green: new Color('#34D399'),
     yellow: new Color('#FBBF24'),
     red: new Color('#FB7185'),
+    blue: new Color('#45A9FF'),
     progressBackground: new Color('#FFFFFF', 0.1),
     badgeBackground: new Color('#FFFFFF', 0.1),
     refreshBackground: new Color('#FFFFFF', 0.08),
@@ -494,7 +495,7 @@ function addHeader(widget, usage) {
 // 16. Progress Bar
 // ============================================================
 
-function addProgressBar(parent, usedPercent, width = 118) {
+function addProgressBar(parent, usedPercent, width = 118, fillColor) {
     const percent = usedPercent === null ? 0 : Math.min(100, Math.max(0, usedPercent));
     const remaining = 100 - percent;
     const bar = parent.addStack();
@@ -506,10 +507,76 @@ function addProgressBar(parent, usedPercent, width = 118) {
         const fill = bar.addStack();
         fill.size = new Size(Math.max(3, (width * percent) / 100), 5);
         fill.cornerRadius = 2.5;
-        fill.backgroundColor = usageColor(remaining);
+        fill.backgroundColor = fillColor ?? usageColor(remaining);
     }
 
     bar.addSpacer();
+}
+
+function formatMediumReset(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+        return '重置時間未知';
+    }
+
+    const diff = date.getTime() - Date.now();
+
+    if (diff <= 0) {
+        return '即將重置';
+    }
+
+    if (diff < 60000) {
+        return '不到 1 分鐘後重置';
+    }
+
+    return formatRemaining(date)
+        .replace(/(\d+)d/g, '$1 天')
+        .replace(/(\d+)h/g, '$1 小時')
+        .replace(/(\d+)m/g, '$1 分鐘')
+        .concat('後重置');
+}
+
+function addMediumHeader(widget) {
+    const row = widget.addStack();
+    row.centerAlignContent();
+
+    const title = row.addText('✿  Codex');
+    title.font = Font.mediumSystemFont(16);
+    title.textColor = THEME.text;
+
+    row.addSpacer();
+
+    const label = row.addText('Usage limits');
+    label.font = Font.systemFont(11);
+    label.textColor = THEME.secondaryText;
+}
+
+function addUsageLimitColumn(parent, window, fallback) {
+    const column = parent.addStack();
+    column.layoutVertically();
+    column.size = new Size(145, 0);
+
+    const title = column.addText(formatWindowTitle(window, fallback));
+    title.font = Font.mediumSystemFont(11);
+    title.textColor = THEME.secondaryText;
+    column.addSpacer(6);
+
+    const remaining = window?.remainingPercent ?? null;
+    const value = column.addText(remaining === null ? '—' : `${Math.round(remaining)}% left`);
+    value.font = Font.systemFont(27);
+    value.textColor = THEME.text;
+    column.addSpacer(8);
+
+    addProgressBar(
+        column,
+        remaining,
+        145,
+        THEME.blue,
+    );
+    column.addSpacer(6);
+
+    const reset = column.addText(formatMediumReset(window?.resetDate));
+    reset.font = Font.systemFont(10);
+    reset.textColor = THEME.secondaryText;
 }
 
 // ============================================================
@@ -682,16 +749,15 @@ function buildMediumWidget(usage) {
 
     // 點 Widget 一般區域 → ChatGPT
     widget.url = CONFIG.widgetUrl;
-    widget.setPadding(9, 14, 8, 14);
-    addHeader(widget, usage);
-    widget.addSpacer(6);
+    widget.setPadding(10, 14, 12, 14);
+    addMediumHeader(widget);
+    widget.addSpacer(16);
 
-    const cards = widget.addStack();
-    cards.layoutHorizontally();
-    createUsageCard(cards, formatWindowTitle(usage.primary, '工作階段'), usage.primary, 138);
-    cards.addSpacer(8);
-
-    createUsageCard(cards, formatWindowTitle(usage.secondary, '每週'), usage.secondary, 138);
+    const limits = widget.addStack();
+    limits.layoutHorizontally();
+    addUsageLimitColumn(limits, usage.primary, '工作階段');
+    limits.addSpacer(14);
+    addUsageLimitColumn(limits, usage.secondary, '每週');
     widget.addSpacer();
 
     // 右下角 Refresh 可單獨執行 Script
