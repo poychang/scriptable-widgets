@@ -86,13 +86,13 @@ const KEYCHAIN_TOKEN =
 const THEME = {
 
   backgroundTop:
-    new Color("#24292F"),
+    new Color("#393A3C"),
 
   backgroundMiddle:
-    new Color("#161B22"),
+    new Color("#2B2C2E"),
 
   backgroundBottom:
-    new Color("#0D1117"),
+    new Color("#222325"),
 
 
   card:
@@ -128,7 +128,7 @@ const THEME = {
 
 
   progressBackground:
-    new Color("#FFFFFF", 0.10),
+    new Color("#FFFFFF", 0.12),
 
   badgeBackground:
     new Color("#FFFFFF", 0.10),
@@ -1249,7 +1249,8 @@ function addHeader(
 function addProgressBar(
   parent,
   usedPercent,
-  width
+  width,
+  fillColor
 ) {
 
   const percent =
@@ -1316,6 +1317,7 @@ function addProgressBar(
 
 
     fill.backgroundColor =
+      fillColor ??
       usageColor(
         remaining
       );
@@ -1323,6 +1325,211 @@ function addProgressBar(
 
 
   bar.addSpacer();
+}
+
+
+// ============================================================
+// 18. Medium Usage Limit Column
+// ============================================================
+
+function addMediumHeader(
+  widget,
+  account
+) {
+
+  const row =
+    widget.addStack();
+
+
+  row.centerAlignContent();
+
+
+  const title =
+    row.addText(
+      "GitHub Copilot"
+    );
+
+
+  title.font =
+    Font.mediumSystemFont(
+      16
+    );
+
+
+  title.textColor =
+    THEME.text;
+
+
+  row.addSpacer();
+
+
+  const label =
+    row.addText(
+      "Usage limits"
+    );
+
+
+  label.font =
+    Font.systemFont(
+      11
+    );
+
+
+  label.textColor =
+    THEME.secondaryText;
+
+
+  if (account.login || account.plan) {
+
+    const detailRow =
+      widget.addStack();
+
+
+    const detail =
+      detailRow.addText(
+        [
+          account.login ? `@${account.login}` : null,
+          account.plan
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      );
+
+
+    detail.font =
+      Font.systemFont(
+        8
+      );
+
+
+    detail.textColor =
+      THEME.mutedText;
+  }
+}
+
+
+function createUsageLimitColumn(
+  parent,
+  title,
+  quota,
+  secondaryQuota
+) {
+
+  const column =
+    parent.addStack();
+
+
+  column.layoutVertically();
+
+
+  column.size =
+    new Size(
+      145,
+      0
+    );
+
+
+  const heading =
+    column.addText(
+      title
+    );
+
+
+  heading.font =
+    Font.mediumSystemFont(
+      11
+    );
+
+
+  heading.textColor =
+    THEME.secondaryText;
+
+
+  column.addSpacer(4);
+
+
+  const remaining =
+    quota?.unlimited
+      ? "Unlimited"
+      : quota?.percentRemaining !== null &&
+          quota?.percentRemaining !== undefined
+        ? `${Math.round(quota.percentRemaining)}% left`
+        : quota?.remaining !== null &&
+            quota?.remaining !== undefined
+          ? `${formatNumber(quota.remaining)} left`
+          : "—";
+
+
+  const value =
+    column.addText(
+      remaining
+    );
+
+
+  value.font =
+    Font.systemFont(
+      remaining.length > 8 ? 23 : 27
+    );
+
+
+  value.textColor =
+    THEME.text;
+
+
+  column.addSpacer(7);
+
+
+  addProgressBar(
+    column,
+    quota?.unlimited
+      ? 0
+      : quota?.usedPercent,
+    145,
+    THEME.blue
+  );
+
+
+  column.addSpacer(6);
+
+
+  const reset =
+    column.addText(
+      quota?.resetDate
+        ? `Resets in ${formatRemainingTime(quota.resetDate)}`
+        : "Reset time unavailable"
+    );
+
+
+  reset.font =
+    Font.systemFont(
+      10
+    );
+
+
+  reset.textColor =
+    THEME.secondaryText;
+
+
+  if (secondaryQuota) {
+
+    column.addSpacer(2);
+
+
+    const detail =
+      column.addText(
+        `Completions ${formatQuotaValue(secondaryQuota)}`
+      );
+
+
+    detail.font =
+      Font.systemFont(
+        8
+      );
+
+
+    detail.textColor =
+      THEME.mutedText;
+  }
 }
 
 
@@ -2034,43 +2241,51 @@ function buildMediumWidget(
 
 
   widget.setPadding(
-    9,
-    12,
+    10,
+    14,
     8,
-    12
+    14
   );
 
 
-  addHeader(
+  addMediumHeader(
     widget,
     account
   );
 
 
-  widget.addSpacer(6);
+  widget.addSpacer(10);
 
 
-  const cards =
+  const limits =
     widget.addStack();
 
 
-  cards.layoutHorizontally();
+  limits.layoutHorizontally();
 
 
-  createPremiumCard(
-    cards,
-    account,
-    CONFIG.premiumCardWidth
+  createUsageLimitColumn(
+    limits,
+    account.tokenBasedBilling
+      ? "AI Credits"
+      : "Premium Requests",
+    account.premium,
+    null
   );
 
 
-  cards.addSpacer(7);
+  limits.addSpacer(14);
 
 
-  createStatusCard(
-    cards,
-    account,
-    CONFIG.statusCardWidth
+  createUsageLimitColumn(
+    limits,
+    account.chat
+      ? "Chat"
+      : "Completions",
+    account.chat ?? account.completions,
+    account.chat
+      ? account.completions
+      : null
   );
 
 
