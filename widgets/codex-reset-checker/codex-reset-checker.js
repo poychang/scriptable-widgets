@@ -553,7 +553,7 @@ function addUsageLimitColumn(parent, window, fallback) {
 
     addProgressBar(
         column,
-        remaining === null ? null : 100 - remaining,
+        remaining,
         145,
         THEME.blue,
     );
