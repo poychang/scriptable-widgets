@@ -514,10 +514,25 @@ function addProgressBar(parent, usedPercent, width = 118, fillColor) {
 }
 
 function formatMediumReset(date) {
+    if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+        return '重置時間未知';
+    }
+
+    const diff = date.getTime() - Date.now();
+
+    if (diff <= 0) {
+        return '即將重置';
+    }
+
+    if (diff < 60000) {
+        return '不到 1 分鐘後重置';
+    }
+
     return formatRemaining(date)
         .replace(/(\d+)d/g, '$1 天')
         .replace(/(\d+)h/g, '$1 小時')
-        .replace(/(\d+)m/g, '$1 分鐘');
+        .replace(/(\d+)m/g, '$1 分鐘')
+        .concat('後重置');
 }
 
 function addMediumHeader(widget) {
@@ -559,7 +574,7 @@ function addUsageLimitColumn(parent, window, fallback) {
     );
     column.addSpacer(6);
 
-    const reset = column.addText(`Resets in ${formatMediumReset(window?.resetDate)}`);
+    const reset = column.addText(formatMediumReset(window?.resetDate));
     reset.font = Font.systemFont(10);
     reset.textColor = THEME.secondaryText;
 }
