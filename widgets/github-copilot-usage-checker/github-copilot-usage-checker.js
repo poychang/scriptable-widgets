@@ -7,14 +7,14 @@
 // 可顯示：
 // - GitHub Login
 // - Copilot 訂閱方案
-// - SKU
 // - Premium Requests / AI Credits
-// - Chat quota
-// - Completions quota
 // - 剩餘百分比
-// - 剩餘數量 / 總額度
-// - Quota Reset
+// - 已用數量 / 總額度
+// - Quota Reset（優先使用 quota_reset_date_utc）
 // - Token-based billing
+// 小型採單欄，中型採左右分區；大型上方顯示 Premium 額度，下方列出帳戶與使用明細。
+// AI Credits 已用額度直接取 credits_used。
+// 進度條表示剩餘比例，額度數字使用千分位分隔。
 //
 // 注意：
 // /copilot_internal/user 為 GitHub 未公開 API，
@@ -406,7 +406,10 @@ function normalizeQuota(name, raw, defaultReset) {
     percentRemaining = clampPercent((remaining / entitlement) * 100);
   }
 
-  const resetDate = normalizeDate(raw.quota_reset_at) ?? defaultReset;
+  // quota_reset_at 可能為 0；優先使用帳號層級的 UTC 重置時間。
+  const resetDate =
+    defaultReset ??
+    (numberOrNull(raw.quota_reset_at) > 0 ? normalizeDate(raw.quota_reset_at) : null);
 
   return {
     name,
@@ -422,6 +425,8 @@ function normalizeQuota(name, raw, defaultReset) {
     unlimited,
 
     overageCount: numberOrNull(raw.overage_count),
+
+    creditsUsed: numberOrNull(raw.credits_used),
 
     overagePermitted: raw.overage_permitted === true,
 
@@ -470,6 +475,8 @@ function normalizeLimitedQuota(name, key, data, resetDate) {
     unlimited: entitlement === -1,
 
     overageCount: null,
+
+    creditsUsed: null,
 
     overagePermitted: false,
 
@@ -567,7 +574,7 @@ function formatQuotaValue(quota) {
   }
 
   if (quota.remaining !== null) {
-    return String(quota.remaining);
+    return formatNumber(quota.remaining);
   }
 
   return "--";
@@ -589,16 +596,33 @@ function formatQuotaDetail(quota) {
   return "Quota";
 }
 
+function formatQuotaUsedDetail(quota, tokenBasedBilling) {
+  if (!quota) {
+    return "無資料";
+  }
+
+  if (quota.unlimited) {
+    return "Unlimited";
+  }
+
+  const used =
+    tokenBasedBilling || quota.tokenBasedBilling
+      ? quota.creditsUsed
+      : quota.entitlement != null && quota.remaining != null && quota.entitlement >= 0
+        ? Math.max(0, quota.entitlement - quota.remaining)
+        : null;
+
+  return `${formatNumber(used)} / ${formatNumber(quota.entitlement)}`;
+}
+
 function formatNumber(value) {
   if (value === null || value === undefined) {
     return "--";
   }
 
-  if (Number.isInteger(value)) {
-    return String(value);
-  }
+  const rounded = Number.isInteger(value) ? value : Math.round(value * 100) / 100;
 
-  return String(Math.round(value * 100) / 100);
+  return rounded.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 // ============================================================
@@ -610,60 +634,11 @@ function getRefreshUrl() {
 }
 
 // ============================================================
-// 16. Header
-// ============================================================
-
-function addHeader(widget, account) {
-  const row = widget.addStack();
-
-  row.centerAlignContent();
-
-  const left = row.addStack();
-
-  left.layoutVertically();
-
-  const title = left.addText("GitHub Copilot");
-
-  title.font = Font.boldSystemFont(14);
-
-  title.textColor = THEME.text;
-
-  if (account.login) {
-    left.addSpacer(1);
-
-    const login = left.addText(`@${account.login}`);
-
-    login.font = Font.systemFont(7);
-
-    login.textColor = THEME.mutedText;
-  }
-
-  row.addSpacer();
-
-  const badge = row.addStack();
-
-  badge.backgroundColor = THEME.badgeBackground;
-
-  badge.cornerRadius = 7;
-
-  badge.setPadding(3, 7, 3, 7);
-
-  const badgeText = badge.addText(account.plan);
-
-  badgeText.font = Font.semiboldSystemFont(8);
-
-  badgeText.textColor = THEME.text;
-}
-
-// ============================================================
 // 17. Progress Bar
 // ============================================================
 
-function addProgressBar(parent, usedPercent, width, fillColor) {
-  const percent =
-    usedPercent === null || usedPercent === undefined ? 0 : Math.min(100, Math.max(0, usedPercent));
-
-  const remaining = 100 - percent;
+function addProgressBar(parent, remainingPercent, width, fillColor) {
+  const percent = clampPercent(remainingPercent) ?? 0;
 
   const bar = parent.addStack();
 
@@ -680,17 +655,17 @@ function addProgressBar(parent, usedPercent, width, fillColor) {
 
     fill.cornerRadius = 2.5;
 
-    fill.backgroundColor = fillColor ?? usageColor(remaining);
+    fill.backgroundColor = fillColor ?? usageColor(percent);
   }
 
   bar.addSpacer();
 }
 
 // ============================================================
-// 18. Medium Usage Limit Column
+// 18. Shared Usage Layout
 // ============================================================
 
-function addMediumHeader(widget, account) {
+function addUsageHeader(widget) {
   const row = widget.addStack();
 
   row.centerAlignContent();
@@ -708,32 +683,24 @@ function addMediumHeader(widget, account) {
   label.font = Font.systemFont(11);
 
   label.textColor = THEME.secondaryText;
-
-  if (account.login || account.plan) {
-    const detailRow = widget.addStack();
-
-    const detail = detailRow.addText(
-      [account.login ? `@${account.login}` : null, account.plan].filter(Boolean).join(" · "),
-    );
-
-    detail.font = Font.systemFont(8);
-
-    detail.textColor = THEME.mutedText;
-  }
 }
 
-function createUsageLimitColumn(parent, title, quota, secondaryQuota) {
+function createUsageLimitColumn(parent, title, quota, width = 145, large = false) {
   const column = parent.addStack();
 
   column.layoutVertically();
 
-  column.size = new Size(145, 0);
+  column.size = new Size(width, 0);
 
   const heading = column.addText(title);
 
-  heading.font = Font.mediumSystemFont(11);
+  heading.font = Font.mediumSystemFont(large ? 13 : 11);
 
   heading.textColor = THEME.secondaryText;
+
+  heading.lineLimit = 1;
+
+  heading.minimumScaleFactor = 0.8;
 
   column.addSpacer(4);
 
@@ -745,15 +712,31 @@ function createUsageLimitColumn(parent, title, quota, secondaryQuota) {
         ? `${formatNumber(quota.remaining)} left`
         : "—";
 
-  const value = column.addText(remaining);
+  const valueRow = column.addStack();
 
-  value.font = Font.systemFont(remaining.length > 8 ? 23 : 27);
+  valueRow.size = new Size(width, large ? 56 : 34);
+
+  valueRow.layoutHorizontally();
+
+  valueRow.centerAlignContent();
+
+  const value = valueRow.addText(remaining);
+
+  value.font = Font.systemFont(large ? 40 : 27);
 
   value.textColor = THEME.text;
 
+  value.lineLimit = 1;
+
+  value.minimumScaleFactor = 0.6;
+
+  value.leftAlignText();
+
+  valueRow.addSpacer();
+
   column.addSpacer(7);
 
-  addProgressBar(column, quota?.unlimited ? 0 : quota?.usedPercent, 145, THEME.blue);
+  addProgressBar(column, quota?.unlimited ? 100 : quota?.percentRemaining, width, THEME.blue);
 
   column.addSpacer(6);
 
@@ -765,191 +748,62 @@ function createUsageLimitColumn(parent, title, quota, secondaryQuota) {
 
   reset.textColor = THEME.secondaryText;
 
-  if (secondaryQuota) {
-    column.addSpacer(2);
+  reset.lineLimit = 1;
 
-    const detail = column.addText(`Completions ${formatQuotaValue(secondaryQuota)}`);
+  reset.minimumScaleFactor = 0.6;
+}
 
-    detail.font = Font.systemFont(8);
+function createAccountDetailsColumn(parent, account, large = false) {
+  const column = parent.addStack();
 
-    detail.textColor = THEME.mutedText;
+  column.layoutVertically();
+
+  column.size = new Size(large ? 0 : 145, 0);
+
+  const resetDate = account.premium?.resetDate ?? account.resetDate;
+
+  const details = [
+    ["Account", account.login ? `@${account.login}` : "--"],
+    ["Plan", account.plan ?? "--"],
+    ["Resets in", resetDate ? formatRemainingTime(resetDate) : "--"],
+    ["Used", formatQuotaUsedDetail(account.premium, account.tokenBasedBilling)],
+  ];
+
+  for (const [index, [label, text]] of details.entries()) {
+    if (index > 0) {
+      column.addSpacer(large ? 6 : 3);
+    }
+
+    const row = column.addStack();
+
+    row.size = new Size(large ? 0 : 145, large ? 24 : 18);
+
+    row.centerAlignContent();
+
+    const name = row.addText(label);
+
+    name.font = Font.systemFont(large ? 14 : 8);
+
+    name.textColor = THEME.secondaryText;
+
+    name.lineLimit = 1;
+
+    row.addSpacer(6);
+
+    row.addSpacer();
+
+    const value = row.addText(text);
+
+    value.font = Font.mediumSystemFont(large ? 16 : 10);
+
+    value.textColor = THEME.text;
+
+    value.lineLimit = 1;
+
+    value.minimumScaleFactor = 0.6;
+
+    value.rightAlignText();
   }
-}
-
-// ============================================================
-// 18. Premium Card
-// ============================================================
-
-function createPremiumCard(parent, account, width) {
-  const quota = account.premium;
-
-  const card = parent.addStack();
-
-  card.layoutVertically();
-
-  card.size = new Size(width, 0);
-
-  card.backgroundColor = THEME.card;
-
-  card.borderColor = THEME.cardBorder;
-
-  card.borderWidth = 1;
-
-  card.cornerRadius = 13;
-
-  card.setPadding(8, 10, 8, 10);
-
-  // title
-  const titleRow = card.addStack();
-
-  titleRow.centerAlignContent();
-
-  const title = titleRow.addText(account.tokenBasedBilling ? "AI Credits" : "Premium");
-
-  title.font = Font.semiboldSystemFont(10);
-
-  title.textColor = THEME.secondaryText;
-
-  titleRow.addSpacer();
-
-  const dot = titleRow.addText("●");
-
-  dot.font = Font.systemFont(6);
-
-  dot.textColor = usageColor(quota?.percentRemaining);
-
-  card.addSpacer(3);
-
-  // remaining
-  const valueRow = card.addStack();
-
-  valueRow.bottomAlignContent();
-
-  const value = valueRow.addText(formatQuotaValue(quota));
-
-  value.font = Font.boldSystemFont(24);
-
-  value.textColor = quota?.unlimited ? THEME.blue : usageColor(quota?.percentRemaining);
-
-  valueRow.addSpacer(5);
-
-  const remaining = valueRow.addText(quota?.unlimited ? "不限量" : "剩餘");
-
-  remaining.font = Font.mediumSystemFont(8);
-
-  remaining.textColor = THEME.secondaryText;
-
-  card.addSpacer(4);
-
-  addProgressBar(card, quota?.unlimited ? 0 : quota?.usedPercent, width - 20);
-
-  card.addSpacer(5);
-
-  const bottom = card.addStack();
-
-  bottom.centerAlignContent();
-
-  const detail = bottom.addText(formatQuotaDetail(quota));
-
-  detail.font = Font.mediumSystemFont(7);
-
-  detail.textColor = THEME.secondaryText;
-
-  bottom.addSpacer();
-
-  const reset = bottom.addText(quota?.resetDate ? `↻ ${formatRemainingTime(quota.resetDate)}` : "");
-
-  reset.font = Font.systemFont(7);
-
-  reset.textColor = THEME.mutedText;
-}
-
-// ============================================================
-// 19. Secondary Status Card
-// ============================================================
-
-function createStatusCard(parent, account, width) {
-  const card = parent.addStack();
-
-  card.layoutVertically();
-
-  card.size = new Size(width, 0);
-
-  card.backgroundColor = THEME.card;
-
-  card.borderColor = THEME.cardBorder;
-
-  card.borderWidth = 1;
-
-  card.cornerRadius = 13;
-
-  card.setPadding(8, 10, 8, 10);
-
-  addStatusRow(card, "Chat", account.chat);
-
-  card.addSpacer(5);
-
-  addStatusRow(card, "Completions", account.completions);
-
-  card.addSpacer(5);
-
-  const separator = card.addStack();
-
-  separator.size = new Size(width - 20, 1);
-
-  separator.backgroundColor = THEME.cardBorder;
-
-  card.addSpacer(5);
-
-  const billingRow = card.addStack();
-
-  billingRow.centerAlignContent();
-
-  const billingTitle = billingRow.addText("Billing");
-
-  billingTitle.font = Font.systemFont(8);
-
-  billingTitle.textColor = THEME.secondaryText;
-
-  billingRow.addSpacer();
-
-  const billing = billingRow.addText(account.tokenBasedBilling ? "AI Credits" : "Quota");
-
-  billing.font = Font.semiboldSystemFont(8);
-
-  billing.textColor = account.tokenBasedBilling ? THEME.purple : THEME.blue;
-
-  if (account.resetDate) {
-    card.addSpacer(4);
-
-    const reset = card.addText(`Reset ${formatDate(account.resetDate)}`);
-
-    reset.font = Font.systemFont(7);
-
-    reset.textColor = THEME.mutedText;
-
-    reset.rightAlignText();
-  }
-}
-
-function addStatusRow(parent, title, quota) {
-  const row = parent.addStack();
-
-  row.centerAlignContent();
-
-  const name = row.addText(title);
-
-  name.font = Font.mediumSystemFont(8);
-
-  name.textColor = THEME.secondaryText;
-
-  row.addSpacer();
-
-  const value = row.addText(formatQuotaValue(quota));
-
-  value.font = Font.semiboldSystemFont(9);
-
-  value.textColor = quota?.unlimited ? THEME.blue : usageColor(quota?.percentRemaining);
 }
 
 // ============================================================
@@ -988,6 +842,7 @@ function addFooter(widget, refreshEnabled) {
 
     text.textColor = THEME.green;
   }
+
 }
 
 // ============================================================
@@ -1010,7 +865,7 @@ function buildSmallWidget(account) {
 
   const title = top.addText("Copilot");
 
-  title.font = Font.boldSystemFont(13);
+  title.font = Font.mediumSystemFont(13);
 
   title.textColor = THEME.text;
 
@@ -1022,37 +877,59 @@ function buildSmallWidget(account) {
 
   plan.textColor = THEME.secondaryText;
 
-  widget.addSpacer(9);
+  plan.lineLimit = 1;
 
-  const quota = account.premium;
-
-  const value = widget.addText(formatQuotaValue(quota));
-
-  value.font = Font.boldSystemFont(30);
-
-  value.textColor = quota?.unlimited ? THEME.blue : usageColor(quota?.percentRemaining);
-
-  const label = widget.addText(account.tokenBasedBilling ? "AI Credits 剩餘" : "Premium 剩餘");
-
-  label.font = Font.mediumSystemFont(9);
-
-  label.textColor = THEME.secondaryText;
-
-  widget.addSpacer(7);
-
-  addProgressBar(widget, quota?.unlimited ? 0 : quota?.usedPercent, 120);
+  plan.minimumScaleFactor = 0.6;
 
   widget.addSpacer(6);
 
-  const detail = widget.addText(formatQuotaDetail(quota));
+  createUsageLimitColumn(
+    widget,
+    account.tokenBasedBilling ? "AI Credits" : "Premium Requests",
+    account.premium,
+    120,
+  );
 
-  detail.font = Font.mediumSystemFont(8);
+  const now = new Date();
 
-  detail.textColor = THEME.secondaryText;
+  const details = [
+    ["Used", formatQuotaUsedDetail(account.premium, account.tokenBasedBilling)],
+    ["Updated", `${pad(now.getHours())}:${pad(now.getMinutes())}`],
+  ];
+
+  for (const [label, text] of details) {
+    widget.addSpacer(4);
+
+    const row = widget.addStack();
+
+    row.layoutHorizontally();
+
+    row.centerAlignContent();
+
+    const name = row.addText(label);
+
+    row.addSpacer(6);
+
+    row.addSpacer();
+
+    const value = row.addText(text);
+
+    for (const item of [name, value]) {
+      item.font = Font.mediumSystemFont(8);
+
+      item.textColor = THEME.secondaryText;
+
+      item.lineLimit = 1;
+
+      item.minimumScaleFactor = 0.6;
+    }
+
+    name.leftAlignText();
+
+    value.rightAlignText();
+  }
 
   widget.addSpacer();
-
-  addFooter(widget, false);
 
   return widget;
 }
@@ -1070,7 +947,7 @@ function buildMediumWidget(account) {
 
   widget.setPadding(10, 14, 8, 14);
 
-  addMediumHeader(widget, account);
+  addUsageHeader(widget);
 
   widget.addSpacer(10);
 
@@ -1078,21 +955,17 @@ function buildMediumWidget(account) {
 
   limits.layoutHorizontally();
 
+  limits.topAlignContent();
+
   createUsageLimitColumn(
     limits,
     account.tokenBasedBilling ? "AI Credits" : "Premium Requests",
     account.premium,
-    null,
   );
 
-  limits.addSpacer(14);
+  limits.addSpacer();
 
-  createUsageLimitColumn(
-    limits,
-    account.chat ? "Chat" : "Completions",
-    account.chat ?? account.completions,
-    account.chat ? account.completions : null,
-  );
+  createAccountDetailsColumn(limits, account);
 
   widget.addSpacer();
 
@@ -1112,61 +985,29 @@ function buildLargeWidget(account) {
 
   widget.url = CONFIG.widgetUrl;
 
-  widget.setPadding(14, 16, 12, 16);
+  widget.setPadding(14, 14, 12, 14);
 
-  addHeader(widget, account);
+  addUsageHeader(widget);
 
   widget.addSpacer(10);
 
-  const cards = widget.addStack();
+  createUsageLimitColumn(
+    widget,
+    account.tokenBasedBilling ? "AI Credits" : "Premium Requests",
+    account.premium,
+    290,
+    true,
+  );
 
-  cards.layoutHorizontally();
+  widget.addSpacer(10);
 
-  createPremiumCard(cards, account, 155);
-
-  cards.addSpacer(10);
-
-  createStatusCard(cards, account, 145);
-
-  widget.addSpacer(12);
-
-  addLargeQuotaRow(widget, "Premium / AI Credits", account.premium);
-
-  widget.addSpacer(7);
-
-  addLargeQuotaRow(widget, "Chat", account.chat);
-
-  widget.addSpacer(7);
-
-  addLargeQuotaRow(widget, "Completions", account.completions);
+  createAccountDetailsColumn(widget, account, true);
 
   widget.addSpacer();
 
   addFooter(widget, true);
 
   return widget;
-}
-
-function addLargeQuotaRow(widget, title, quota) {
-  const row = widget.addStack();
-
-  row.centerAlignContent();
-
-  const name = row.addText(title);
-
-  name.font = Font.mediumSystemFont(9);
-
-  name.textColor = THEME.secondaryText;
-
-  row.addSpacer();
-
-  const detail = row.addText(
-    quota ? `${formatQuotaValue(quota)} · ` + `${formatQuotaDetail(quota)}` : "無資料",
-  );
-
-  detail.font = Font.semiboldSystemFont(9);
-
-  detail.textColor = quota?.unlimited ? THEME.blue : usageColor(quota?.percentRemaining);
 }
 
 // ============================================================
